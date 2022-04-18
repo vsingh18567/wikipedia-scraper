@@ -1,39 +1,30 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 import requests
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 import time
 import sqlite3
+from dotenv import load_dotenv
+import pymongo
+import os
+import certifi
+import random
 
-# set up database
-conn = sqlite3.connect("data.db")
-delete_table_sql = "DROP TABLE data"
-create_table_sql = """
-CREATE TABLE IF NOT EXISTS data (
-    id integer PRIMARY KEY,
-    name text NOT NULL
-)
-"""
-c = conn.cursor()
-try:
-    c.execute(delete_table_sql)
-except sqlite3.OperationalError:
-    pass
-c.execute(create_table_sql)
+
+
+
+
 
 # set up selenium
 options = webdriver.ChromeOptions()
 options.add_argument("--ignore-certificate-errors")
 options.add_argument("--incognito")
-options.add_argument("--headless")
 options.add_argument("--no-sandbox")
+options.add_argument("--headless")
 options.add_argument("--disable-dev-shm-usage")
 s = Service(ChromeDriverManager().install())
-
-base_url = "https://www.glassdoor.co.in/Reviews/index.htm"
 
 
 def insert_company(id, name):
@@ -50,7 +41,7 @@ def insert_company(id, name):
     conn.commit()
 
 
-def scrape_page(driver):
+def scrape_page(driver, db):
     """
     Scrapes a particular page of companies
 
@@ -60,16 +51,27 @@ def scrape_page(driver):
     """
 
     results = driver.find_elements(By.CLASS_NAME, "single-company-result")
+    data = []
     for result in results:
         id = result.get_attribute("data-emp-id")
-        company = result.find_element(By.TAG_NAME, "h2").text
-        insert_company(id, company)
+        company = result.find_element(By.TAG_NAME, "h2")
+        company_name = company.find_element(By.TAG_NAME, "a").text
+        print(id, company_name)
+        data.append({
+            "_id": id,
+            "company": company_name
+        })
+        try:
+            db.companies.insert_one({"_id": id, "company": company_name})
+        except pymongo.errors.DuplicateKeyError:
+            pass
 
+    # res = db.companies.insert_many(data, ordered=False)
     next_btn = driver.find_element(By.CLASS_NAME, "next")
     return next_btn
 
 
-def parse(country):
+def parse(country, db):
     """
     Scrapes all the companies from a particular country
 
@@ -77,17 +79,23 @@ def parse(country):
 
     returns: None
     """
+    
 
     driver = webdriver.Chrome(service=s, options=options)
     driver.implicitly_wait(10)
     driver.get(base_url)
 
+    if db.countries.find_one({"name": country}) != None:
+        return
+    db.countries.insert_one({"name": country})
+
     # search for country
     el = driver.find_element(By.ID, "LocationSearch")
+    el.clear()
     el.send_keys(country)
     driver.find_element(By.ID, "HeroSearchButton").click()
 
-    next_btn = scrape_page(driver)
+    next_btn = scrape_page(driver, db)
 
     print(f"Page 1 from {country} complete")
 
@@ -99,7 +107,7 @@ def parse(country):
         start = time.time()
         # go to next page
         next_btn.click()
-        next_btn = scrape_page(driver)
+        next_btn = scrape_page(driver, db)
         end = time.time()
         count += 1
         print(f"Page {count} from {country} complete in {end - start}")
@@ -112,12 +120,25 @@ def set_up_threads(countries):
     countries: An iterable of names of countries
     """
 
-    pool = Pool(processes=4)
+    pool = Pool(processes=cpu_count())
     pool.map(parse, countries)
 
 
 if __name__ == "__main__":
+    load_dotenv()    
+    db_username = os.getenv('MONGO_USERNAME')
+    db_password = os.getenv('MONGO_PASSWORD')
+    db_name = "CIS_188"
+    base_url = "https://www.glassdoor.co.in/Reviews/index.htm"
+
+    db_client = pymongo.MongoClient(f"mongodb+srv://{db_username}:{db_password}@cluster0.9jzwq.mongodb.net/{db_name}?retryWrites=true&w=majority",
+        tlsCAFile=certifi.where())
+    db = db_client.get_database('CIS_188')
+
     countries = requests.get("https://restcountries.com/v3.1/all").json()
+    # convert json to list of common country names
     countries = [country["name"]["common"] for country in countries]
-    set_up_threads(countries)
-    conn.close()
+    random.shuffle(countries)
+    for country in countries:
+        parse(country, db)
+    # set_up_threads(countries)
