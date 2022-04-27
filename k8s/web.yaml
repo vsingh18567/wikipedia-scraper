@@ -5,7 +5,7 @@ metadata:
   labels:
     app: scraper
 spec:
-  replicas: 8
+  replicas: 12
   selector:
     matchLabels:
       app: scraper
