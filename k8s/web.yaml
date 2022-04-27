@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scraper
+  labels:
+    app: scraper
+spec:
+  replicas: 8
+  selector:
+    matchLabels:
+      app: scraper
+  template:
+    metadata:
+      labels:
+        app: scraper
+    spec:
+      containers:
+      - name: concurrent-scraper
+        image: vsingh18567/cis188-scraper:v6
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scraper
+spec:
+  selector:
+    app: scraper
+  ports:
+    - port: 5000
